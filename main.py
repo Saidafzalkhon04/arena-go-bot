@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
@@ -7,13 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from geopy.distance import geodesic
 from datetime import datetime
+from aiohttp import web  # Render uchun portni band qilishga kerak
 
 from db import Database
 
 # Logging sozlamalari
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO )
 
-# Bot tokeni (Siz taqdim etgan token)
+# Bot tokeni
 TOKEN = "8724037162:AAHoxj_-NSO96BnoL7O85WlPDiBYSmQFqUU"
 
 # Ma'lumotlar bazasi
@@ -22,6 +24,21 @@ db = Database("arena_go.db")
 # Bot va Dispatcher
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# --- Render uchun soxta web-server (Port xatosini tuzatish uchun) ---
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render beradigan PORTni ishlatamiz, bo'lmasa 10000
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
 
 # --- States (FSM) ---
 class Registration(StatesGroup):
@@ -86,13 +103,13 @@ async def start_cmd(message: types.Message, state: FSMContext):
         await state.set_state(Registration.choosing_role)
     else:
         is_owner = bool(user[3])
-        await message.answer("Xush kelibsiz! Bo'limni tanlang:", reply_markup=get_main_menu(is_owner))
+        await message.answer("Xush kelibsiz!", reply_markup=get_main_menu(is_owner))
 
 @dp.message(Registration.choosing_role)
 async def process_role(message: types.Message, state: FSMContext):
     if message.text == "Mijoz (Futbolchi)":
         db.update_user_role(message.from_user.id, 0)
-        await message.answer("Siz Mijoz (Futbolchi) sifatida ro'yxatdan o'tdingiz.", reply_markup=get_main_menu(False))
+        await message.answer("Siz Mijoz sifatida ro'yxatdan o'tdingiz.", reply_markup=get_main_menu(False))
         await state.clear()
     elif message.text == "Stadion Egasi":
         db.update_user_role(message.from_user.id, 1)
@@ -101,7 +118,7 @@ async def process_role(message: types.Message, state: FSMContext):
     else:
         await message.answer("Iltimos, tugmalardan birini tanlang.")
 
-# --- Stadion Qo'shish (Stadion Egasi) ---
+# --- Stadion Qo'shish ---
 @dp.message(F.text == "Stadion Qo'shish")
 async def add_stadium_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
@@ -186,7 +203,7 @@ async def process_booking_date(message: types.Message, state: FSMContext):
     stadium = db.get_stadium_by_id(data['stadium_id'])
     bookings = db.get_stadium_bookings(data['stadium_id'], message.text)
     
-    booked_times = ", ".join([f"{b[0]}-{b[1]}" for b in bookings]) if bookings else "Hozircha hamma vaqt bo'sh"
+    booked_times = ", ".join([f"{b[0]}-{b[1]}" for b in bookings]) if bookings else "Hozircha bo'sh"
     text = f"🏟 {stadium[2]}\n⏰ Ish vaqti: {stadium[9]}\n📅 Sana: {message.text}\n🚫 Band vaqtlar: {booked_times}\n\nBron qilish vaqtini kiriting (masalan: 18:00-19:00):"
     
     await state.update_data(date=message.text)
@@ -212,14 +229,14 @@ async def process_booking_time(message: types.Message, state: FSMContext):
             pass
         await state.clear()
     else:
-        await message.answer("Vaqtni to'g'ri formatda kiriting (masalan: 18:00-19:00).")
+        await message.answer("Vaqtni to'g'ri formatda kiriting (18:00-19:00).")
 
 # --- Bronni Bekor Qilish ---
 @dp.message(F.text == "Mening Bronlarim")
 async def my_bookings(message: types.Message):
     bookings = db.get_user_bookings(message.from_user.id)
     if not bookings:
-        await message.answer("Sizda hali faol bronlar mavjud emas.")
+        await message.answer("Sizda hali bronlar mavjud emas.")
         return
     
     for b in bookings:
@@ -251,7 +268,7 @@ async def team_menu(message: types.Message):
         [InlineKeyboardButton(text="➕ E'lon qoldirish", callback_data="add_team")],
         [InlineKeyboardButton(text="🔍 E'lonlarni ko'rish", callback_data="view_teams")]
     ])
-    await message.answer("Jamoa bo'limi: bu yerda o'yin uchun sheriklar topishingiz mumkin.", reply_markup=kb)
+    await message.answer("Jamoa bo'limi: sheriklar topishingiz mumkin.", reply_markup=kb)
 
 @dp.callback_query(F.data == "add_team")
 async def add_team_start(callback: types.CallbackQuery, state: FSMContext):
@@ -280,7 +297,7 @@ async def team_time(message: types.Message, state: FSMContext):
 @dp.message(TeamFinder.needed_players)
 async def team_players(message: types.Message, state: FSMContext):
     await state.update_data(players=message.text)
-    await message.answer("Qo'shimcha ma'lumot (masalan: darvozabon kerak):")
+    await message.answer("Qo'shimcha ma'lumot:")
     await state.set_state(TeamFinder.description)
 
 @dp.message(TeamFinder.description)
@@ -301,29 +318,6 @@ async def view_teams(callback: types.CallbackQuery):
             await callback.message.answer(text)
     await callback.answer()
 
-# --- Mening Stadionlarim (Stadion Egasi) ---
-@dp.message(F.text == "Mening Stadionlarim")
-async def my_stadiums(message: types.Message):
-    stadiums = db.get_owner_stadiums(message.from_user.id)
-    bookings = db.get_owner_stadium_bookings(message.from_user.id)
-    
-    if not stadiums:
-        await message.answer("Sizda hali ro'yxatdan o'tgan stadionlar yo'q.")
-        return
-    
-    text = "🏟 **Sizning stadionlaringiz:**\n\n"
-    for st in stadiums:
-        text += f"• {st[2]} ({st[3]})\n"
-    
-    if bookings:
-        text += "\n📅 **Yangi faol bronlar:**\n"
-        for b in bookings:
-            text += f"\n👤 {b[8]}: {b[7]} stadionida\n📅 {b[3]} ({b[4]}-{b[5]})"
-    else:
-        text += "\n\nHozircha yangi bronlar yo'q."
-        
-    await message.answer(text)
-
 # --- Profil ---
 @dp.message(F.text == "Profil")
 async def show_profile(message: types.Message):
@@ -331,9 +325,14 @@ async def show_profile(message: types.Message):
     role = "Stadion Egasi" if user[3] else "Mijoz (Futbolchi)"
     await message.answer(f"👤 **Profil:**\n🆔 ID: {user[0]}\n👤 Ism: {user[1]}\n🎭 Rol: {role}")
 
+# --- Asosiy ishga tushirish qismi ---
 async def main():
+    # Render uchun soxta web-serverni ishga tushiramiz
+    await start_web_server()
+    
+    # Botni ishga tushiramiz (Polling)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+    
