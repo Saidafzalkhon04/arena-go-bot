@@ -78,13 +78,8 @@ def get_main_menu(is_owner=False):
 # ---------- START HANDLER ----------
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
-    user = db.get_user(message.from_user.id)
-    if not user:
-        db.add_user(message.from_user.id, message.from_user.full_name, message.from_user.username)
-        await message.answer("ArenaGo botiga xush kelibsiz!\nSiz kimsiz?", reply_markup=get_role_keyboard())
-        await state.set_state(Registration.choosing_role)
-    else:
-        await message.answer("Xush kelibsiz!", reply_markup=get_main_menu(bool(user[3])))
+    logging.info(f"/start bosildi: {message.from_user.id}")
+    await message.answer("Bot ishlayapti ✅")
 
 
 # ---------- ROLE HANDLER ----------
