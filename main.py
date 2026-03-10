@@ -9,6 +9,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from geopy.distance import geodesic
 from aiohttp import web
+from aiogram.fsm.storage.memory import MemoryStorage
+
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
 from db import Database
 
@@ -86,8 +90,6 @@ async def start_cmd(message: types.Message, state: FSMContext):
         db.add_user(message.from_user.id, message.from_user.full_name, message.from_user.username)
         await message.answer("ArenaGo botiga xush kelibsiz!\nSiz kimsiz?", reply_markup=get_role_keyboard())
         await state.set_state(Registration.choosing_role)
-    else:
-        await message.answer("Xush kelibsiz!", reply_markup=get_main_menu(bool(user[3])))
 
 # ---------- ROLE HANDLER ----------
 @dp.message(Registration.choosing_role)
