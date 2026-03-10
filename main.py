@@ -1,167 +1,230 @@
 import asyncio
 import logging
 import os
+
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+
 from geopy.distance import geodesic
 from aiohttp import web
-from datetime import datetime
 
-from db import Database
+from database import Database
 
-logging.basicConfig(level=logging.INFO )
-TOKEN = "8724037162:AAHoxj_-NSO96BnoL7O85WlPDiBYSmQFqUU"
-db = Database("arena_go.db")
+logging.basicConfig(level=logging.INFO)
+
+TOKEN = os.getenv("BOT_TOKEN")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- Render Fix ---
-async def handle(r): return web.Response(text="Running")
-async def start_server():
-    app = web.Application(); app.router.add_get("/", handle)
-    runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
+db = Database("arena_go.db")
 
-# --- States ---
-class Reg(StatesGroup): role = State()
-class AddSt(StatesGroup): name = State(); link = State(); loc = State(); price = State(); hours = State(); photo = State()
-class Book(StatesGroup): sid = State(); date = State(); slot = State()
+# ---------- Render Web Server ----------
 
-# --- Keyboards ---
-def main_menu(is_owner=False):
-    kb = []
+async def handle(request):
+    return web.Response(text="ArenaGo Bot ishlayapti")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+
+    await site.start()
+
+
+# ---------- STATES ----------
+
+class Registration(StatesGroup):
+    choosing_role = State()
+
+
+# ---------- KEYBOARDS ----------
+
+def get_role_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="Mijoz (Futbolchi)"),
+                KeyboardButton(text="Stadion Egasi")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
+
+def get_main_menu(is_owner=False):
+
     if is_owner:
-        kb.append([KeyboardButton(text="Mening Stadionlarim"), KeyboardButton(text="Stadion Qo'shish")])
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="Mening Stadionlarim")],
+                [KeyboardButton(text="Stadion Qo'shish")],
+                [KeyboardButton(text="Profil")]
+            ],
+            resize_keyboard=True
+        )
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Yaqin Stadionlar", request_location=True)],
+            [KeyboardButton(text="Barcha Stadionlar")],
+            [KeyboardButton(text="Jamoa 🤝")],
+            [KeyboardButton(text="Mening Bronlarim")],
+            [KeyboardButton(text="Profil")]
+        ],
+        resize_keyboard=True
+    )
+
+
+# ---------- START ----------
+
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message, state: FSMContext):
+
+    user = db.get_user(message.from_user.id)
+
+    if not user:
+
+        db.add_user(
+            message.from_user.id,
+            message.from_user.full_name,
+            message.from_user.username
+        )
+
+        await message.answer(
+            "ArenaGo botiga xush kelibsiz!\nSiz kimsiz?",
+            reply_markup=get_role_keyboard()
+        )
+
+        await state.set_state(Registration.choosing_role)
+
     else:
-        kb.append([KeyboardButton(text="Yaqin Stadionlar", request_location=True), KeyboardButton(text="Barcha Stadionlar")])
-        kb.append([KeyboardButton(text="Jamoa 🤝"), KeyboardButton(text="Mening Bronlarim")])
-    kb.append([KeyboardButton(text="Profil")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- Handlers ---
-@dp.message(CommandStart())
-async def start(message: types.Message, state: FSMContext):
-    db.add_user(message.from_user.id, message.from_user.full_name, message.from_user.username)
-    await message.answer("Xush kelibsiz! Rolni tanlang:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Mijoz"), KeyboardButton(text="Stadion Egasi")]], resize_keyboard=True))
-    await state.set_state(Reg.role)
+        await message.answer(
+            "Xush kelibsiz!",
+            reply_markup=get_main_menu(bool(user[3]))
+        )
 
-@dp.message(Reg.role)
-async def set_role(message: types.Message, state: FSMContext):
+
+# ---------- ROLE ----------
+
+@dp.message(Registration.choosing_role)
+async def process_role(message: types.Message, state: FSMContext):
+
     is_owner = 1 if message.text == "Stadion Egasi" else 0
-    db.cursor.execute("UPDATE users SET is_owner=? WHERE id=?", (is_owner, message.from_user.id))
-    db.connection.commit()
-    await message.answer(f"Siz {message.text} bo'lib kirdingiz.", reply_markup=main_menu(is_owner))
+
+    db.update_user_role(message.from_user.id, is_owner)
+
+    await message.answer(
+        f"Siz {message.text} sifatida ro'yxatdan o'tdingiz",
+        reply_markup=get_main_menu(bool(is_owner))
+    )
+
     await state.clear()
 
-# --- Stadium List ---
-@dp.message(F.text == "Barcha Stadionlar")
+
+# ---------- LOCATION ----------
+
 @dp.message(F.location)
-async def list_st(message: types.Message):
+async def handle_location(message: types.Message):
+
+    lat = message.location.latitude
+    lon = message.location.longitude
+
+    db.update_user_location(message.from_user.id, lat, lon)
+
     stadiums = db.get_all_stadiums()
-    u_loc = (message.location.latitude, message.location.longitude) if message.location else None
-    
-    found = False
-    for s in stadiums:
-        dist = geodesic(u_loc, (s[4], s[5])).km if u_loc else None
-        if message.location and dist > 5: continue # 5km radius
-        
-        found = True
-        text = f"🏟 {s[2]}\n💰 {s[6]:,} so'm\n⏰ {s[7]}\n📍 [Xarita Link]({s[3]})"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Bron qilish 📅", callback_data=f"book_{s[0]}")]])
-        await message.answer_photo(s[8], caption=text, reply_markup=kb, parse_mode="Markdown")
-    
-    if not found: await message.answer("Stadionlar topilmadi.")
 
-# --- Booking with Slots ---
-@dp.callback_query(F.data.startswith("book_"))
-async def start_book(cb: types.CallbackQuery, state: FSMContext):
-    await state.update_data(sid=int(cb.data.split("_")[1]))
-    await cb.message.answer("Sanani kiriting (masalan: 2024-03-10):")
-    await state.set_state(Book.date)
+    if not stadiums:
+        await message.answer("Hozircha stadionlar yo'q")
+        return
 
-@dp.message(Book.date)
-async def book_date(message: types.Message, state: FSMContext):
-    d = await state.get_data()
-    s = db.get_stadium_by_id(d['sid'])
-    booked = db.get_booked_slots(d['sid'], message.text)
-    
-    # Ish vaqtini bo'lish (masalan 09:00-21:00)
-    try:
-        start_h, end_h = map(int, s[7].split("-")[0].split(":")[0]), map(int, s[7].split("-")[1].split(":")[0])
-        start_h, end_h = list(start_h)[0], list(end_h)[0]
-    except: start_h, end_h = 9, 22
+    nearby = sorted(
+        [(geodesic((lat, lon), (s[4], s[5])).km, s) for s in stadiums],
+        key=lambda x: x[0]
+    )[:5]
 
-    kb = []
-    for h in range(start_h, end_h):
-        slot = f"{h:02d}:00-{(h+1):02d}:00"
-        if slot not in booked:
-            kb.append([InlineKeyboardButton(text=slot, callback_data=f"slot_{slot}")])
-    
-    await state.update_data(date=message.text)
-    await message.answer("Bo'sh vaqtni tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await state.set_state(Book.slot)
+    await message.answer("Sizga eng yaqin stadionlar:")
 
-@dp.callback_query(F.data.startswith("slot_"))
-async def book_slot(cb: types.CallbackQuery, state: FSMContext):
-    slot = cb.data.split("_")[1]
-    d = await state.get_data()
-    db.add_booking(cb.from_user.id, d['sid'], d['date'], slot)
-    await cb.message.edit_text(f"✅ Bron qilindi: {d['date']} | {slot}")
-    await state.clear()
+    for dist, s in nearby:
 
-# --- Other Commands ---
-@dp.message(F.text == "Jamoa 🤝")
-async def team(message: types.Message): await message.answer("Tez orada...")
+        caption = (
+            f"Stadion: {s[2]}\n"
+            f"Masofa: {dist:.2f} km\n"
+            f"Narx: {s[6]} so'm\n"
+            f"Ish vaqti: {s[9]}"
+        )
 
-@dp.message(F.text == "Mening Bronlarim")
-async def my_books(message: types.Message):
-    books = db.get_user_bookings(message.from_user.id)
-    if not books: return await message.answer("Bronlar yo'q.")
-    for b in books:
-        await message.answer(f"🏟 {b[2]}\n📅 {b[0]} | ⏰ {b[1]}\n📍 [Xarita]({b[3]})", parse_mode="Markdown")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Lokatsiya",
+                        callback_data=f"loc_{s[0]}"
+                    )
+                ]
+            ]
+        )
 
-@dp.message(F.text == "Profil")
-async def profile(message: types.Message):
+        if s[8]:
+            await message.answer_photo(s[8], caption=caption, reply_markup=kb)
+        else:
+            await message.answer(caption, reply_markup=kb)
+
+
+# ---------- SEND LOCATION ----------
+
+@dp.callback_query(F.data.startswith("loc_"))
+async def send_stadium_loc(callback: types.CallbackQuery):
+
+    await callback.answer()
+
+    stadium_id = int(callback.data.split("_")[1])
+
+    s = db.get_stadium_by_id(stadium_id)
+
+    if s:
+        await bot.send_location(callback.from_user.id, s[4], s[5])
+
+
+# ---------- PROFILE ----------
+
+@dp.message(F.text.contains("Profil"))
+async def show_profile(message: types.Message):
+
     u = db.get_user(message.from_user.id)
-    await message.answer(f"👤 {u[1]}\n🎭 Rol: {'Egasi' if u[3] else 'Mijoz'}")
 
-# --- Owner Add Stadium ---
-@dp.message(F.text == "Stadion Qo'shish")
-async def add_st_start(message: types.Message, state: FSMContext):
-    await message.answer("Stadion nomi:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(AddSt.name)
+    role = "Stadion Egasi" if u[3] else "Mijoz"
 
-@dp.message(AddSt.name)
-async def add_st_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text); await message.answer("Google Maps linki:"); await state.set_state(AddSt.link)
+    text = (
+        f"Sizning profilingiz\n\n"
+        f"ID: {u[0]}\n"
+        f"Ism: {u[1]}\n"
+        f"Rol: {role}\n"
+        f"Username: @{u[2] if u[2] else 'yoq'}"
+    )
 
-@dp.message(AddSt.link)
-async def add_st_link(message: types.Message, state: FSMContext):
-    await state.update_data(link=message.text); await message.answer("Lokatsiya yuboring:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📍 Lokatsiya", request_location=True)]], resize_keyboard=True)); await state.set_state(AddSt.loc)
+    await message.answer(text)
 
-@dp.message(AddSt.loc, F.location)
-async def add_st_loc(message: types.Message, state: FSMContext):
-    await state.update_data(lat=message.location.latitude, lon=message.location.longitude); await message.answer("Narxi:", reply_markup=ReplyKeyboardRemove()); await state.set_state(AddSt.price)
 
-@dp.message(AddSt.price)
-async def add_st_price(message: types.Message, state: FSMContext):
-    await state.update_data(price=message.text); await message.answer("Ish vaqti (09:00-22:00):"); await state.set_state(AddSt.hours)
-
-@dp.message(AddSt.hours)
-async def add_st_hours(message: types.Message, state: FSMContext):
-    await state.update_data(hours=message.text); await message.answer("Rasm yuboring:"); await state.set_state(AddSt.photo)
-
-@dp.message(AddSt.photo, F.photo)
-async def add_st_photo(message: types.Message, state: FSMContext):
-    d = await state.get_data()
-    db.add_stadium(message.from_user.id, d['name'], d['link'], d['lat'], d['lon'], d['price'], d['hours'], message.photo[-1].file_id)
-    await message.answer("✅ Qo'shildi!", reply_markup=main_menu(True)); await state.clear()
+# ---------- MAIN ----------
 
 async def main():
-    await start_server()
+
+    await start_web_server()
+
+    logging.info("Bot ishga tushdi")
+
     await dp.start_polling(bot)
 
-if __name__ == "__main__": asyncio.run(main())
+
+if __name__ == "__main__":
+    asyncio.run(main())
