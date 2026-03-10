@@ -3,14 +3,12 @@ from datetime import datetime
 
 class Database:
     def __init__(self, db_file):
-        # Ma'lumotlar bazasiga ulanish
         self.connection = sqlite3.connect(db_file)
         self.cursor = self.connection.cursor()
         self.create_tables()
 
     def create_tables(self):
         with self.connection:
-            # Foydalanuvchilar jadvali
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY,
@@ -21,7 +19,6 @@ class Database:
                     longitude REAL
                 )
             """)
-            # Stadionlar jadvali
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS stadiums (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +34,6 @@ class Database:
                     FOREIGN KEY (owner_id) REFERENCES users (id)
                 )
             """)
-            # Bronlar jadvali
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +48,6 @@ class Database:
                     FOREIGN KEY (stadium_id) REFERENCES stadiums (id)
                 )
             """)
-            # Jamoalar (Team Finder) jadvali
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS teams (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,13 +56,13 @@ class Database:
                     game_date TEXT,
                     game_time TEXT,
                     needed_players INTEGER,
+                    joined_players INTEGER DEFAULT 0,
                     description TEXT,
                     created_at TEXT,
                     FOREIGN KEY (creator_id) REFERENCES users (id)
                 )
             """)
 
-    # --- Foydalanuvchi funksiyalari ---
     def add_user(self, user_id, full_name, username):
         with self.connection:
             return self.cursor.execute(
@@ -77,23 +72,16 @@ class Database:
 
     def update_user_role(self, user_id, is_owner):
         with self.connection:
-            return self.cursor.execute(
-                "UPDATE users SET is_owner = ? WHERE id = ?",
-                (is_owner, user_id)
-            )
+            return self.cursor.execute("UPDATE users SET is_owner = ? WHERE id = ?", (is_owner, user_id))
 
     def update_user_location(self, user_id, lat, lon):
         with self.connection:
-            return self.cursor.execute(
-                "UPDATE users SET latitude = ?, longitude = ? WHERE id = ?",
-                (lat, lon, user_id)
-            )
+            return self.cursor.execute("UPDATE users SET latitude = ?, longitude = ? WHERE id = ?", (lat, lon, user_id))
 
     def get_user(self, user_id):
         with self.connection:
             return self.cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
-    # --- Stadion funksiyalari ---
     def add_stadium(self, owner_id, name, address, lat, lon, price, description, photo_id, work_hours):
         with self.connection:
             return self.cursor.execute(
@@ -109,11 +97,14 @@ class Database:
         with self.connection:
             return self.cursor.execute("SELECT * FROM stadiums WHERE id = ?", (stadium_id,)).fetchone()
 
+    def get_stadium_by_name(self, name):
+        with self.connection:
+            return self.cursor.execute("SELECT * FROM stadiums WHERE name LIKE ?", (f"%{name}%",)).fetchone()
+
     def get_owner_stadiums(self, owner_id):
         with self.connection:
             return self.cursor.execute("SELECT * FROM stadiums WHERE owner_id = ?", (owner_id,)).fetchall()
 
-    # --- Bron funksiyalari ---
     def add_booking(self, user_id, stadium_id, date, start_time, end_time):
         with self.connection:
             created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -125,10 +116,7 @@ class Database:
 
     def cancel_booking(self, booking_id, user_id):
         with self.connection:
-            return self.cursor.execute(
-                "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND user_id = ?",
-                (booking_id, user_id)
-            )
+            return self.cursor.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ? AND user_id = ?", (booking_id, user_id))
 
     def get_booking_by_id(self, booking_id):
         with self.connection:
@@ -155,7 +143,6 @@ class Database:
                 (owner_id,)
             ).fetchall()
 
-    # --- Jamoa (Team Finder) funksiyalari ---
     def add_team_post(self, creator_id, stadium_name, date, time, players, description):
         with self.connection:
             created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -166,5 +153,14 @@ class Database:
 
     def get_all_teams(self):
         with self.connection:
-            return self.cursor.execute("SELECT t.*, u.full_name FROM teams t JOIN users u ON t.creator_id = u.id ORDER BY t.id DESC").fetchall()
-                 
+            # Faqat kerakli odam yig'ilmagan e'lonlarni ko'rsatish
+            return self.cursor.execute("SELECT t.*, u.full_name FROM teams t JOIN users u ON t.creator_id = u.id WHERE t.joined_players < t.needed_players ORDER BY t.id DESC").fetchall()
+
+    def get_team_by_id(self, team_id):
+        with self.connection:
+            return self.cursor.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+
+    def join_team(self, team_id):
+        with self.connection:
+            return self.cursor.execute("UPDATE teams SET joined_players = joined_players + 1 WHERE id = ?", (team_id,))
+            
