@@ -49,7 +49,6 @@ class Database:
                     end_time TEXT,
                     status TEXT DEFAULT 'active',
                     invite_link TEXT,
-                    is_confirmed BOOLEAN DEFAULT 0,
                     created_at TEXT
                 )
             """)
@@ -72,23 +71,18 @@ class Database:
         with self.connection:
             return self.cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
-    def update_stats(self, user_id, goals=0):
-        with self.connection:
-            return self.cursor.execute("UPDATE users SET games_played = games_played + 1, goals = goals + ? WHERE id = ?", (goals, user_id))
-
     # Stadium Methods
     def add_stadium(self, owner_id, name, address, lat, lon, price, desc, photo, hours):
         with self.connection:
             return self.cursor.execute("INSERT INTO stadiums (owner_id, name, address, latitude, longitude, price_per_hour, description, photo_id, work_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (owner_id, name, address, lat, lon, price, desc, photo, hours))
 
-    def update_stadium(self, s_id, name, price, hours, address, desc):
+    def update_stadium(self, s_id, price, hours):
         with self.connection:
-            return self.cursor.execute("UPDATE stadiums SET name=?, price_per_hour=?, work_hours=?, address=?, description=? WHERE id=?", (name, price, hours, address, desc, s_id))
+            return self.cursor.execute("UPDATE stadiums SET price_per_hour=?, work_hours=? WHERE id=?", (price, hours, s_id))
 
     def delete_stadium(self, s_id):
         with self.connection:
             self.cursor.execute("DELETE FROM stadiums WHERE id=?", (s_id,))
-            self.cursor.execute("DELETE FROM bookings WHERE stadium_id=?", (s_id,))
 
     def get_all_stadiums(self):
         with self.connection:
@@ -103,6 +97,16 @@ class Database:
             return self.cursor.execute("SELECT * FROM stadiums WHERE owner_id=?", (owner_id,)).fetchall()
 
     # Booking & Team Methods
+    def check_availability(self, s_id, date, start, end):
+        with self.connection:
+            # Band vaqtlar bilan kesishishni tekshirish
+            res = self.cursor.execute("""
+                SELECT id FROM bookings 
+                WHERE stadium_id = ? AND booking_date = ? AND status = 'active'
+                AND ((start_time <= ? AND end_time > ?) OR (start_time < ? AND end_time >= ?))
+            """, (s_id, date, start, start, end, end)).fetchone()
+            return res is None
+
     def add_booking(self, user_id, s_id, date, start, end, link):
         with self.connection:
             created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -110,10 +114,6 @@ class Database:
             b_id = self.cursor.lastrowid
             self.cursor.execute("INSERT INTO team_members (booking_id, user_id) VALUES (?, ?)", (b_id, user_id))
             return b_id
-
-    def get_booking_by_id(self, b_id):
-        with self.connection:
-            return self.cursor.execute("SELECT * FROM bookings WHERE id = ?", (b_id,)).fetchone()
 
     def get_booking_by_link(self, link):
         with self.connection:
@@ -129,23 +129,9 @@ class Database:
 
     def get_user_bookings(self, u_id):
         with self.connection:
-            return self.cursor.execute("SELECT b.*, s.name, s.latitude, s.longitude FROM bookings b JOIN stadiums s ON b.stadium_id = s.id WHERE b.user_id = ? AND b.status = 'active'", (u_id,)).fetchall()
-
-    def get_stadium_bookings(self, s_id, date):
-        with self.connection:
-            return self.cursor.execute("SELECT start_time, end_time FROM bookings WHERE stadium_id = ? AND booking_date = ? AND status = 'active'", (s_id, date)).fetchall()
+            return self.cursor.execute("SELECT b.*, s.name FROM bookings b JOIN stadiums s ON b.stadium_id = s.id WHERE b.user_id = ? AND b.status = 'active'", (u_id,)).fetchall()
 
     def cancel_booking(self, b_id):
         with self.connection:
             return self.cursor.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (b_id,))
-
-    def get_user_teams(self, u_id):
-        with self.connection:
-            return self.cursor.execute("""
-                SELECT b.*, s.name 
-                FROM team_members tm 
-                JOIN bookings b ON tm.booking_id = b.id 
-                JOIN stadiums s ON b.stadium_id = s.id 
-                WHERE tm.user_id = ? AND b.status = 'active'
-            """, (u_id,)).fetchall()
-            
+        
