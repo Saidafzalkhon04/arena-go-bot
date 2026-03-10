@@ -14,6 +14,7 @@ from db import Database  # db.py ishlatiladi
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
+logging.info("ArenaGo Bot ishga tushmoqda...")
 
 # ---------- TOKEN ----------
 TOKEN = os.getenv("BOT_TOKEN")
